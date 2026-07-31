@@ -1,4 +1,4 @@
-name: Publish Alpha Packages
+name: Publish Packages
 
 on:
   push:
@@ -23,8 +23,11 @@ jobs:
       - name: Restore Dependencies
         run: dotnet restore
 
-      - name: Build and Pack Release Artifacts
-        run: dotnet pack -c Release --output ./artifacts
+      - name: Build Solution Assemblies
+        run: dotnet build -c Release
+
+      - name: Pack Release Artifacts
+        run: dotnet pack -c Release --no-build --output ./artifacts
 
       - name: Exchange OIDC Token for Temporary NuGet Key
         uses: NuGet/login@v1

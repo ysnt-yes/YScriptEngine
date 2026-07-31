@@ -1,5 +1,6 @@
 ﻿# YScriptEngine
 ## The script compiler and runner you didn't ask for
+![Build Status](https://github.com/ysnt-yes/YScriptEngine/workflows/Publish%20Packages/badge.svg?branch=master)
 
 I am notoriously bad at naming things, and also at documenting things.
 
