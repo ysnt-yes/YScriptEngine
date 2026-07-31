@@ -1,4 +1,6 @@
 <Solution>
   <Project Path="YScriptEngine.Abstractions/YScriptEngine.Abstractions.csproj" />
+  <Project Path="YScriptEngine.Lsp.Abstractions/YScriptEngine.Lsp.Abstractions.csproj" />
+  <Project Path="YScriptEngine.Lsp.Roslyn/YScriptEngine.Lsp.Roslyn.csproj" />
   <Project Path="YScriptEngine.Roslyn/YScriptEngine.Roslyn.csproj" />
 </Solution>
