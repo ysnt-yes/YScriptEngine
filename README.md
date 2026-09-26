@@ -10,7 +10,7 @@ I am notoriously bad at naming things, and also at documenting things.
 
 ### Currently Supported Languages
 - [x] CSharp/Roslyn
-- [ ] JavaScript/TypeScript
+- [x] JavaScript/TypeScript
 - [ ] Node Graphs
 - [ ] Python
 - [ ] Lua
