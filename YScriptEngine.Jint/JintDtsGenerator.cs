@@ -13,6 +13,21 @@ public static class JintDtsGenerator
         return char.ToLowerInvariant(s[0]) + s[1..];
     }
 
+    private static string CleanTypeName(Type t)
+    {
+        if (!t.IsGenericType) return t.Name;
+
+        var name = t.Name;
+        var backtickIndex = name.IndexOf('`');
+        if (backtickIndex > 0)
+        {
+            name = name[..backtickIndex];
+        }
+
+        var argNames = string.Join("_", t.GetGenericArguments().Select(CleanTypeName));
+        return $"{name}_{argNames}";
+    }
+
     public static string GeneratePluginsDts(Dictionary<string, Type> activePlugins)
     {
         var sb = new StringBuilder();
@@ -20,7 +35,8 @@ public static class JintDtsGenerator
 
         foreach (var plugin in activePlugins.Values)
         {
-            sb.AppendLine($"interface {plugin.Name} {{");
+            var cleanedPluginName = CleanTypeName(plugin);
+            sb.AppendLine($"interface {cleanedPluginName} {{");
             
             foreach (var p in plugin.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
@@ -46,7 +62,7 @@ public static class JintDtsGenerator
         sb.AppendLine("    const plugins: {");
         foreach (var kvp in activePlugins)
         {
-            sb.AppendLine($"        readonly {Lower(kvp.Key)}: {kvp.Value.Name};");
+            sb.AppendLine($"        readonly {Lower(kvp.Key)}: {CleanTypeName(kvp.Value)};");
         }
         sb.AppendLine("    };\n}");
 
@@ -57,19 +73,22 @@ public static class JintDtsGenerator
     {
         var sb = new StringBuilder();
         var customTypes = new HashSet<Type>();
-        var propertiesBlock = new StringBuilder();
 
+        var cleanedContextName = CleanTypeName(contextType);
+        
+        sb.AppendLine($"interface {cleanedContextName} {{");
         foreach (var p in contextType.GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => !p.Name.Equals("plugins", StringComparison.OrdinalIgnoreCase)))
         {
             var isNullable = NullCtx.Create(p).ReadState == NullabilityState.Nullable;
-            propertiesBlock.AppendLine($"    const {Lower(p.Name)}: {Map(p.PropertyType, customTypes)}{(isNullable ? " | null" : "")};");
+            sb.AppendLine($"    {Lower(p.Name)}: {Map(p.PropertyType, customTypes)}{(isNullable ? " | null" : "")};");
         }
+        sb.AppendLine("}\n");
 
         sb.Append(GenerateCustomModelInterfaces(customTypes));
 
         sb.AppendLine("declare global {");
-        sb.Append(propertiesBlock.ToString());
+        sb.AppendLine($"    const context: {cleanedContextName};");
         sb.AppendLine("}");
 
         return sb.ToString();
@@ -84,17 +103,19 @@ public static class JintDtsGenerator
         while (queue.Count > 0)
         {
             var type = queue.Dequeue();
-            if (processed.Contains(type) || type.IsPrimitive || type == typeof(string) || type == typeof(object)) continue;
+            if (processed.Contains(type) || type.IsPrimitive || type == typeof(string) || type == typeof(object) || type == typeof(void) || typeof(Task).IsAssignableFrom(type)) continue;
             processed.Add(type);
 
-            sb.AppendLine($"interface {type.Name} {{");
+            var cleanedTypeName = CleanTypeName(type);
+            sb.AppendLine($"interface {cleanedTypeName} {{");
             
             foreach (var p in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
                 var propType = p.PropertyType;
-                if (!propType.IsPrimitive && propType != typeof(string) && propType != typeof(void) && !typeof(Task).IsAssignableFrom(propType))
+                var baseType = propType.IsGenericType ? propType.GetGenericArguments().First() : propType;
+                if (!baseType.IsPrimitive && baseType != typeof(string) && baseType != typeof(object) && baseType != typeof(void) && !typeof(Task).IsAssignableFrom(baseType))
                 {
-                    queue.Enqueue(propType.IsGenericType ? propType.GetGenericArguments().First() : propType);
+                    queue.Enqueue(baseType);
                 }
                 var isNullable = NullCtx.Create(p).ReadState == NullabilityState.Nullable;
                 sb.AppendLine($"    {Lower(p.Name)}: {Map(p.PropertyType, typesToGenerate)}{(isNullable ? " | null" : "")};");
@@ -121,10 +142,12 @@ public static class JintDtsGenerator
         _ when t == typeof(bool)   => "boolean",
         _ when t == typeof(void)   => "void",
         _ when t == typeof(Task)   => "Promise<void>",
-        _ when t == typeof(int) || t == typeof(double) || t == typeof(float) || t == typeof(long) => "number",
+        _ when t == typeof(int) || t == typeof(double) || t == typeof(float) || t == typeof(long) || t == typeof(decimal) => "number",
+        _ when t == typeof(DateTime) || t == typeof(DateTimeOffset) => "string",
         _ when t.IsGenericType && t.GetGenericTypeDefinition() == typeof(Nullable<>) => Map(Nullable.GetUnderlyingType(t)!, customTypes),
         _ when t.IsGenericType && t.GetGenericTypeDefinition() == typeof(Task<>) => $"Promise<{Map(t.GetGenericArguments().First(), customTypes)}>",
         _ when t.IsGenericType && (t.GetGenericTypeDefinition() == typeof(List<>) || t.GetGenericTypeDefinition() == typeof(IEnumerable<>)) => $"{Map(t.GetGenericArguments().First(), customTypes)}[]",
+        _ when t.IsArray => $"{Map(t.GetElementType()!, customTypes)}[]",
         _ when typeof(Delegate).IsAssignableFrom(t) => "Function",
         _ => RegisterCustomType(t, customTypes)
     };
@@ -133,6 +156,6 @@ public static class JintDtsGenerator
     {
         var actualType = t.IsGenericType ? t.GetGenericArguments().First() : t;
         customTypes.Add(actualType);
-        return actualType.Name;
+        return CleanTypeName(actualType);
     }
 }
