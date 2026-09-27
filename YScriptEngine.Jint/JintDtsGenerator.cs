@@ -88,6 +88,7 @@ public static class JintDtsGenerator
             processed.Add(type);
 
             sb.AppendLine($"interface {type.Name} {{");
+            
             foreach (var p in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
                 var propType = p.PropertyType;
@@ -98,6 +99,17 @@ public static class JintDtsGenerator
                 var isNullable = NullCtx.Create(p).ReadState == NullabilityState.Nullable;
                 sb.AppendLine($"    {Lower(p.Name)}: {Map(p.PropertyType, typesToGenerate)}{(isNullable ? " | null" : "")};");
             }
+
+            foreach (var m in type.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .Where(m => m.DeclaringType != typeof(object) && !m.IsSpecialName))
+            {
+                var parameters = string.Join(", ", m.GetParameters().Select(p => {
+                    var isParamNullable = NullCtx.Create(p).WriteState == NullabilityState.Nullable;
+                    return $"{Lower(p.Name)}: {Map(p.ParameterType, typesToGenerate)}{(isParamNullable ? " | null" : "")}";
+                }));
+                sb.AppendLine($"    {Lower(m.Name)}({parameters}): {Map(m.ReturnType, typesToGenerate)};");
+            }
+
             sb.AppendLine("}\n");
         }
         return sb.ToString();
