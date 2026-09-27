@@ -8,7 +8,7 @@
     
     <!-- Release Settings -->
     <PropertyGroup>
-        <Version>1.0.1-alpha</Version>
+        <Version>1.0.2-alpha</Version>
         <Description>The Jint Engine for the YScriptEngine project.</Description>
         <PackageTags>YScriptEngine;Scripting;Jint</PackageTags>
     </PropertyGroup>
