@@ -1,7 +1,6 @@
 <Project>
     <PropertyGroup>
         <!-- Versioning & Lifecycle -->
-        <Version>1.0.0-alpha</Version>
         <Authors>Yes</Authors>
         <Company>Yes's Stuff and Things</Company>
 

@@ -8,6 +8,7 @@
     
     <!-- Release Settings -->
     <PropertyGroup>
+        <Version>1.0.0-alpha</Version>
         <Description>The contracts package for the main YScriptEngine project.</Description>
         <PackageTags>YScriptEngine;Scripting</PackageTags>
     </PropertyGroup>
