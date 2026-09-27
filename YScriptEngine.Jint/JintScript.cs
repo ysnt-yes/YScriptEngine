@@ -1,4 +1,3 @@
-using System.Reflection;
 using Acornima.Ast;
 using Jint;
 using YScriptEngine.Abstractions;
@@ -9,16 +8,7 @@ public class JintScript(Engine engine, Prepared<Script> preparedProgram) : IScri
 {
     public async Task ExecuteAsync(IScriptContext context)
     {
-
-        var properties = context.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
-        foreach (var prop in properties)
-        {
-            if (prop.CanRead)
-            {
-                engine.SetValue(prop.Name, prop.GetValue(context));
-            }
-        }
-
+        engine.SetValue("context", context);
         await engine.EvaluateAsync(preparedProgram);
     }
 }
