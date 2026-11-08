@@ -2,6 +2,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Completion;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Formatting;
 using Microsoft.CodeAnalysis.Scripting;
 using Microsoft.CodeAnalysis.Text;
 using Microsoft.Extensions.Logging;
@@ -98,5 +99,13 @@ public class RoslynLspProvider(ScriptOptions sharedScriptOptions, ILogger<Roslyn
                 Message: d.GetMessage(),
                 Severity: d.Severity.ToString().ToLower()
             ));
+    }
+    
+    public async Task<string> FormatCodeAsync(string code, Type payloadType, CancellationToken token)
+    {
+        var document = CreateTransientDocument(code, payloadType);
+        var formattedDocument = await Formatter.FormatAsync(document, cancellationToken: token);
+        var formattedText = await formattedDocument.GetTextAsync(token);
+        return formattedText.ToString();
     }
 }
