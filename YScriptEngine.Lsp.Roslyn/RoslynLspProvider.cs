@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Classification;
 using Microsoft.CodeAnalysis.Completion;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Formatting;
@@ -79,7 +80,7 @@ public class RoslynLspProvider(ScriptOptions sharedScriptOptions, ILogger<Roslyn
         return completions.ItemsList.Select(item => new LspCompletionItem(
             Label: item.DisplayText,
             Type: item.Tags.FirstOrDefault()?.ToLower() ?? "variable",
-            Detail: item.InlineDescription ?? ""
+            Detail: item.InlineDescription
         ));
     }
 
@@ -93,7 +94,7 @@ public class RoslynLspProvider(ScriptOptions sharedScriptOptions, ILogger<Roslyn
         var allDiagnostics = compilation.GetDiagnostics(token);
 
         return allDiagnostics
-            .Where(d => d.Severity == DiagnosticSeverity.Error || d.Severity == DiagnosticSeverity.Warning)
+            .Where(d => d.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning)
             .Select(d => new LspDiagnostic(
                 From: d.Location.SourceSpan.Start,
                 To: d.Location.SourceSpan.End,
@@ -121,5 +122,51 @@ public class RoslynLspProvider(ScriptOptions sharedScriptOptions, ILogger<Roslyn
         
         var sectionsText = quickInfo.Sections.Select(s => s.Text);
         return string.Join("\n\n", sectionsText);
+    }
+    
+    public async Task<int[]> GetSemanticTokensDataAsync(string code, Type payloadType, CancellationToken token)
+    {
+        var document = CreateTransientDocument(code, payloadType);
+        var text = await document.GetTextAsync(token);
+        var classifiedSpans = await Classifier.GetClassifiedSpansAsync(document, new TextSpan(0, text.Length), token);
+
+        var tokensData = new List<int>();
+        var lastLine = 0;
+        var lastCharacter = 0;
+
+        foreach (var span in classifiedSpans)
+        {
+            var tokenType = span.ClassificationType switch
+            {
+                ClassificationTypeNames.ClassName or ClassificationTypeNames.InterfaceName => 0,
+                ClassificationTypeNames.MethodName => 1,
+                ClassificationTypeNames.PropertyName => 2,
+                ClassificationTypeNames.FieldName => 3,
+                ClassificationTypeNames.ParameterName => 4,
+                ClassificationTypeNames.StructName => 5,
+                _ => -1
+            };
+
+            if (tokenType == -1) continue;
+
+            var linePositionSpan = text.Lines.GetLinePositionSpan(span.TextSpan);
+            var line = linePositionSpan.Start.Line;
+            var character = linePositionSpan.Start.Character;
+            var length = span.TextSpan.Length;
+
+            var deltaLine = line - lastLine;
+            var deltaStart = deltaLine == 0 ? character - lastCharacter : character;
+
+            tokensData.Add(deltaLine);
+            tokensData.Add(deltaStart);
+            tokensData.Add(length);
+            tokensData.Add(tokenType);
+            tokensData.Add(0);
+
+            lastLine = line;
+            lastCharacter = character;
+        }
+
+        return [.. tokensData];
     }
 }
