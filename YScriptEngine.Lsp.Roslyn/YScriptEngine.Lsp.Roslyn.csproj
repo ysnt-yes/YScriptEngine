@@ -8,7 +8,7 @@
 
     <!-- Release Settings -->
     <PropertyGroup>
-        <Version>1.1.2-alpha</Version>
+        <Version>1.1.3-alpha</Version>
         <Description>The Roslyn LSP for the YScriptEngine project.</Description>
         <PackageTags>YScriptEngine;Scripting;Roslyn;Lsp</PackageTags>
     </PropertyGroup>

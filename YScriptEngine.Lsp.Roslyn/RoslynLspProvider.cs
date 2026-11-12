@@ -15,6 +15,8 @@ namespace YScriptEngine.Lsp.Roslyn;
 public class RoslynLspProvider(ScriptOptions sharedScriptOptions, ILogger<RoslynLspProvider> logger) : ILspProvider
 {
     private readonly ConcurrentDictionary<Type, (Solution Solution, ProjectId ProjectId)> _cache = new();
+    
+    public void InvalidateCache() => _cache.Clear();
 
     public void PreCacheBaseSolution(Type globalsType)
     {
@@ -99,7 +101,8 @@ public class RoslynLspProvider(ScriptOptions sharedScriptOptions, ILogger<Roslyn
                 From: d.Location.SourceSpan.Start,
                 To: d.Location.SourceSpan.End,
                 Message: d.GetMessage(),
-                Severity: d.Severity.ToString().ToLower()
+                Severity: d.Severity.ToString().ToLower(),
+                Code: d.Id
             ));
     }
     
@@ -124,49 +127,54 @@ public class RoslynLspProvider(ScriptOptions sharedScriptOptions, ILogger<Roslyn
         return string.Join("\n\n", sectionsText);
     }
     
-    public async Task<int[]> GetSemanticTokensDataAsync(string code, Type payloadType, CancellationToken token)
+    public async Task<IEnumerable<LspQuickAction>> GetQuickActionsAsync(
+        string code,
+        int startOffset,
+        int endOffset,
+        Type payloadType,
+        CancellationToken token)
     {
         var document = CreateTransientDocument(code, payloadType);
+        var completionService = CompletionService.GetService(document);
+        if (completionService is null) return [];
+
         var text = await document.GetTextAsync(token);
-        var classifiedSpans = await Classifier.GetClassifiedSpansAsync(document, new TextSpan(0, text.Length), token);
+        var length = Math.Max(0, endOffset - startOffset);
+        var targetWord = text.GetSubText(new TextSpan(startOffset, length)).ToString();
+        if (string.IsNullOrWhiteSpace(targetWord)) return [];
 
-        var tokensData = new List<int>();
-        var lastLine = 0;
-        var lastCharacter = 0;
+        var completions = await completionService.GetCompletionsAsync(
+            document,
+            endOffset,
+            cancellationToken: token);
 
-        foreach (var span in classifiedSpans)
+        var actions = new List<LspQuickAction>();
+
+        foreach (var item in completions.ItemsList)
         {
-            var tokenType = span.ClassificationType switch
+            if (item.DisplayText != targetWord) continue;
+
+            var change = await completionService.GetChangeAsync(document, item, cancellationToken: token);
+
+            foreach (var textChange in change.TextChanges)
             {
-                ClassificationTypeNames.ClassName or ClassificationTypeNames.InterfaceName => 0,
-                ClassificationTypeNames.MethodName => 1,
-                ClassificationTypeNames.PropertyName => 2,
-                ClassificationTypeNames.FieldName => 3,
-                ClassificationTypeNames.ParameterName => 4,
-                ClassificationTypeNames.StructName => 5,
-                _ => -1
-            };
-
-            if (tokenType == -1) continue;
-
-            var linePositionSpan = text.Lines.GetLinePositionSpan(span.TextSpan);
-            var line = linePositionSpan.Start.Line;
-            var character = linePositionSpan.Start.Character;
-            var length = span.TextSpan.Length;
-
-            var deltaLine = line - lastLine;
-            var deltaStart = deltaLine == 0 ? character - lastCharacter : character;
-
-            tokensData.Add(deltaLine);
-            tokensData.Add(deltaStart);
-            tokensData.Add(length);
-            tokensData.Add(tokenType);
-            tokensData.Add(0);
-
-            lastLine = line;
-            lastCharacter = character;
+                if (textChange.Span.Start >= startOffset ||
+                    textChange.NewText?.Contains("using ") != true) continue;
+                
+                var lineSpan = text.Lines.GetLinePositionSpan(textChange.Span);
+                
+                actions.Add(new LspQuickAction(
+                    Title: textChange.NewText.Trim(),
+                    StartLine: lineSpan.Start.Line + 1,
+                    StartColumn: lineSpan.Start.Character + 1,
+                    EndLine: lineSpan.End.Line + 1,
+                    EndColumn: lineSpan.End.Character + 1,
+                    NewText: textChange.NewText));
+            }
         }
 
-        return [.. tokensData];
+        return actions.DistinctBy(a => a.Title);
     }
+
+    
 }
