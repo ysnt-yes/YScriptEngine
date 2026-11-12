@@ -8,15 +8,16 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Scripting;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using YScriptEngine.Abstractions;
 
 namespace YScriptEngine.Roslyn;
 
-public class RoslynCompiler(ScriptOptions globalOptions, ILogger<RoslynCompiler> logger) : ICompiler
+public class RoslynCompiler(IServiceProvider serviceProvider, ILogger<RoslynCompiler> logger) : ICompiler
 {
     private readonly HashSet<string> _bannedTypesOrNamespaces = new(StringComparer.OrdinalIgnoreCase);
-    
+    private ScriptOptions GlobalOptions => serviceProvider.GetRequiredService<ScriptOptions>();
     public void AddBannedTypesOrNamespaces(IEnumerable<string> typeNames)
     {
         foreach (var typeName in typeNames)
@@ -41,7 +42,7 @@ public class RoslynCompiler(ScriptOptions globalOptions, ILogger<RoslynCompiler>
                 .Where(n => !string.IsNullOrEmpty(n))
                 .Distinct();
 
-            var runtimeOptions = globalOptions
+            var runtimeOptions = GlobalOptions
                 .AddReferences(assemblies)
                 .AddImports(namespaces!);
 

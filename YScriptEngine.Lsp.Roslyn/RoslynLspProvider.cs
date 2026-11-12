@@ -7,15 +7,16 @@ using Microsoft.CodeAnalysis.Formatting;
 using Microsoft.CodeAnalysis.QuickInfo;
 using Microsoft.CodeAnalysis.Scripting;
 using Microsoft.CodeAnalysis.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using YScriptEngine.Lsp.Abstractions;
 
 namespace YScriptEngine.Lsp.Roslyn;
 
-public class RoslynLspProvider(ScriptOptions sharedScriptOptions, ILogger<RoslynLspProvider> logger) : ILspProvider
+public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynLspProvider> logger) : ILspProvider
 {
     private readonly ConcurrentDictionary<Type, (Solution Solution, ProjectId ProjectId)> _cache = new();
-    
+    private ScriptOptions SharedScriptOptions => serviceProvider.GetRequiredService<ScriptOptions>();
     public void InvalidateCache() => _cache.Clear();
 
     public void PreCacheBaseSolution(Type globalsType)
@@ -30,7 +31,7 @@ public class RoslynLspProvider(ScriptOptions sharedScriptOptions, ILogger<Roslyn
         logger.LogDebug("Registering Type: {TypeName}", typeName);
         
         var compilationOptions = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, scriptClassName: "Submission#0", concurrentBuild: false, metadataImportOptions: MetadataImportOptions.Public)
-            .WithUsings(sharedScriptOptions.Imports);
+            .WithUsings(SharedScriptOptions.Imports);
             
         var parseOptions = new CSharpParseOptions(
             LanguageVersion.Latest, 
@@ -46,7 +47,7 @@ public class RoslynLspProvider(ScriptOptions sharedScriptOptions, ILogger<Roslyn
             language: LanguageNames.CSharp, 
             compilationOptions: compilationOptions, 
             parseOptions: parseOptions,
-            metadataReferences: sharedScriptOptions.MetadataReferences, 
+            metadataReferences: SharedScriptOptions.MetadataReferences, 
             isSubmission: true, 
             hostObjectType: globalsType
         );
