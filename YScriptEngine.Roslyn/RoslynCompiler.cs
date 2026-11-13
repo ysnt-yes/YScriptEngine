@@ -65,7 +65,7 @@ public class RoslynCompiler(IServiceProvider serviceProvider, ILogger<RoslynComp
 
             peStream.Position = 0;
 
-            var scriptAlc = new ScriptAssemblyLoadContext(assemblies);
+            var scriptAlc = new ScriptAssemblyLoadContext(assemblies, runtimeOptions);
             var scriptAssembly = scriptAlc.LoadFromStream(peStream);
 
             var submissionType = scriptAssembly.GetType("Submission#0")
@@ -109,13 +109,23 @@ public class RoslynCompiler(IServiceProvider serviceProvider, ILogger<RoslynComp
     {
         private readonly Dictionary<string, Assembly> _knownAssemblies;
 
-        public ScriptAssemblyLoadContext(IEnumerable<Assembly> referencedAssemblies)
+        public ScriptAssemblyLoadContext(IEnumerable<Assembly> referencedAssemblies, ScriptOptions options)
             : base($"RoslynScript_{Guid.NewGuid():N}", isCollectible: true)
         {
+            var refNames = options.MetadataReferences
+                .OfType<PortableExecutableReference>()
+                .Select(r => Path.GetFileNameWithoutExtension(r.FilePath))
+                .Where(n => !string.IsNullOrEmpty(n))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var optionAssemblies = AppDomain.CurrentDomain.GetAssemblies()
+                .Where(a => a.GetName().Name is not null && refNames.Contains(a.GetName().Name!));
+
             _knownAssemblies = referencedAssemblies
+                .Concat(optionAssemblies)
                 .Where(a => a.GetName().Name is not null)
                 .GroupBy(a => a.GetName().Name!, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+                .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
         }
 
         protected override Assembly? Load(AssemblyName assemblyName)
