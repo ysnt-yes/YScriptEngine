@@ -1,30 +1,31 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.CodeAnalysis.Scripting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using YScriptEngine.Abstractions;
 
 namespace YScriptEngine.Roslyn;
 
-public class RoslynCompiler(IServiceProvider serviceProvider, ILogger<RoslynCompiler> logger) : ICompiler
+public sealed class RoslynScriptCompiler(IServiceProvider serviceProvider)
 {
-    private readonly HashSet<string> _bannedTypesOrNamespaces = new(StringComparer.OrdinalIgnoreCase);
-    private ScriptOptions GlobalOptions => serviceProvider.GetRequiredService<ScriptOptions>();
+    private readonly ScriptOptions _globalOptions = 
+        serviceProvider.GetService<ScriptOptions>() ?? ScriptOptions.Default;
 
-    public void AddBannedTypesOrNamespaces(IEnumerable<string> typeNames)
-    {
-        foreach (var typeName in typeNames)
-        {
-            _bannedTypesOrNamespaces.Add(typeName);
-        }
-    }
+    private readonly ILogger<RoslynScriptCompiler> _logger = 
+        serviceProvider.GetService<ILogger<RoslynScriptCompiler>>() ?? NullLogger<RoslynScriptCompiler>.Instance;
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public Task<IScript> CompileAsync(string scriptCode, Type contextType)
     {
+        ArgumentNullException.ThrowIfNull(scriptCode);
+        ArgumentNullException.ThrowIfNull(contextType);
+
         try
         {
             var types = new List<Type>();
@@ -33,56 +34,46 @@ public class RoslynCompiler(IServiceProvider serviceProvider, ILogger<RoslynComp
                 types.AddRange(contextType.GetGenericArguments());
             }
 
-            var assemblies = types.Select(t => t.Assembly).Append(contextType.Assembly).Distinct().ToList();
+            var contextAssemblies = types.Select(t => t.Assembly)
+                .Append(contextType.Assembly)
+                .Distinct()
+                .ToList();
 
-            var namespaces = types.Select(t => t.Namespace).Append(contextType.Namespace)
+            var namespaces = types.Select(t => t.Namespace)
+                .Append(contextType.Namespace)
                 .Where(n => !string.IsNullOrEmpty(n))
                 .Distinct();
 
-            var runtimeOptions = GlobalOptions
-                .AddReferences(assemblies)
+            var runtimeOptions = _globalOptions
+                .AddReferences(contextAssemblies)
                 .AddImports(namespaces!);
 
             var script = CSharpScript.Create<object>(scriptCode, runtimeOptions, globalsType: contextType);
             var compilation = script.GetCompilation();
 
-            var diagnostics = compilation.GetDiagnostics();
-            LogCompilationDiagnostics(diagnostics);
-
-            if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
-            {
-                throw new CompilationErrorException("Failed to compile user script due to syntax errors.", diagnostics);
-            }
-
             using var peStream = new MemoryStream();
             var emitResult = compilation.Emit(peStream);
 
+            LogCompilationDiagnostics(emitResult.Diagnostics);
+
             if (!emitResult.Success)
             {
-                LogCompilationDiagnostics(emitResult.Diagnostics);
-                throw new CompilationErrorException("Failed to emit script assembly.", emitResult.Diagnostics);
+                throw new CompilationErrorException(
+                    "Failed to compile user script due to syntax errors.",
+                    emitResult.Diagnostics);
             }
 
-            peStream.Position = 0;
+            peStream.Seek(0, SeekOrigin.Begin);
 
-            var scriptAlc = new ScriptAssemblyLoadContext(assemblies, runtimeOptions);
-            var scriptAssembly = scriptAlc.LoadFromStream(peStream);
+            var globalReferencePaths = _globalOptions.MetadataReferences
+                .OfType<PortableExecutableReference>()
+                .Select(r => r.FilePath)
+                .Where(path => !string.IsNullOrEmpty(path))!;
 
-            var submissionType = scriptAssembly.GetType("Submission#0")
-                ?? throw new InvalidOperationException("Compiled script is missing Submission#0 entry type.");
+            var loadContext = new CollectibleScriptLoadContext(contextAssemblies, globalReferencePaths!);
+            var scriptAssembly = loadContext.LoadFromStream(peStream);
 
-            var factoryMethod = submissionType.GetMethod("<Factory>", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-                ?? throw new InvalidOperationException("Compiled script is missing <Factory> entry method.");
-
-            var factoryDelegate = factoryMethod.CreateDelegate<Func<object?[], Task<object>>>();
-
-            ScriptRunner<object> runDelegate = (globals, _) =>
-            {
-                var submissionArray = new[] { globals, null };
-                return factoryDelegate(submissionArray);
-            };
-
-            return Task.FromResult<IScript>(new RoslynScript(runDelegate, scriptAlc));
+            return Task.FromResult<IScript>(new RoslynScript(scriptAssembly, loadContext));
         }
         catch (Exception exception)
         {
@@ -94,45 +85,80 @@ public class RoslynCompiler(IServiceProvider serviceProvider, ILogger<RoslynComp
     {
         foreach (var diagnostic in diagnostics)
         {
-            switch (diagnostic.Severity)
+            if (diagnostic.IsSuppressed)
             {
-                case DiagnosticSeverity.Info: logger.LogInformation("{Message}", diagnostic.GetMessage()); break;
-                case DiagnosticSeverity.Warning: logger.LogWarning("{Message}", diagnostic.GetMessage()); break;
-                case DiagnosticSeverity.Error: logger.LogError("{Message}", diagnostic.GetMessage()); break;
-                case DiagnosticSeverity.Hidden: break;
-                default: logger.LogDebug("{Message}", diagnostic.GetMessage()); break;
+                continue;
             }
+
+            var logLevel = diagnostic.Severity switch
+            {
+                DiagnosticSeverity.Error => LogLevel.Error,
+                DiagnosticSeverity.Warning => LogLevel.Warning,
+                DiagnosticSeverity.Info => LogLevel.Information,
+                DiagnosticSeverity.Hidden => LogLevel.Trace,
+                _ => LogLevel.Debug
+            };
+
+            if (!_logger.IsEnabled(logLevel))
+            {
+                continue;
+            }
+
+            var lineSpan = diagnostic.Location.GetLineSpan();
+            var line = lineSpan.StartLinePosition.Line + 1;
+            var column = lineSpan.StartLinePosition.Character + 1;
+
+            _logger.Log(
+                logLevel,
+                "Script compilation diagnostic [{DiagnosticId}] at ({Line},{Column}): {Message}",
+                diagnostic.Id,
+                line,
+                column,
+                diagnostic.GetMessage());
         }
     }
 
-    private sealed class ScriptAssemblyLoadContext : AssemblyLoadContext
+    private sealed class CollectibleScriptLoadContext : AssemblyLoadContext
     {
         private readonly Dictionary<string, Assembly> _knownAssemblies;
+        private readonly Dictionary<string, string> _knownPathsBySimpleName;
 
-        public ScriptAssemblyLoadContext(IEnumerable<Assembly> referencedAssemblies, ScriptOptions options)
-            : base($"RoslynScript_{Guid.NewGuid():N}", isCollectible: true)
+        public CollectibleScriptLoadContext(
+            IEnumerable<Assembly> knownAssemblies,
+            IEnumerable<string> referenceFilePaths)
+            : base(isCollectible: true)
         {
-            var refNames = options.MetadataReferences
-                .OfType<PortableExecutableReference>()
-                .Select(r => Path.GetFileNameWithoutExtension(r.FilePath))
-                .Where(n => !string.IsNullOrEmpty(n))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            _knownAssemblies = knownAssemblies
+                .Where(a => a.FullName is not null)
+                .GroupBy(a => a.FullName!)
+                .ToDictionary(g => g.Key, g => g.First());
 
-            var optionAssemblies = AppDomain.CurrentDomain.GetAssemblies()
-                .Where(a => a.GetName().Name is not null && refNames.Contains(a.GetName().Name!));
-
-            _knownAssemblies = referencedAssemblies
-                .Concat(optionAssemblies)
-                .Where(a => a.GetName().Name is not null)
-                .GroupBy(a => a.GetName().Name!, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
+            _knownPathsBySimpleName = referenceFilePaths
+                .Where(File.Exists)
+                .GroupBy(p => Path.GetFileNameWithoutExtension(p), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         }
 
         protected override Assembly? Load(AssemblyName assemblyName)
         {
-            if (assemblyName.Name is not null && _knownAssemblies.TryGetValue(assemblyName.Name, out var assembly))
+            if (_knownAssemblies.TryGetValue(assemblyName.FullName, out var assembly))
             {
                 return assembly;
+            }
+
+            try
+            {
+                return Default.LoadFromAssemblyName(assemblyName);
+            }
+            catch
+            {
+                // Not in Default ALC;
+            }
+
+            if (assemblyName.Name is not null &&
+                _knownPathsBySimpleName.TryGetValue(assemblyName.Name, out var dllPath))
+            {
+                return Default.LoadFromAssemblyPath(dllPath);
             }
 
             return null;
