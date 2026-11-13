@@ -78,7 +78,7 @@ public class RoslynCompiler(IServiceProvider serviceProvider, ILogger<RoslynComp
 
             ScriptRunner<object> runDelegate = (globals, _) =>
             {
-                var submissionArray = new[] { globals };
+                var submissionArray = new[] { globals, null };
                 return factoryDelegate(submissionArray);
             };
 
