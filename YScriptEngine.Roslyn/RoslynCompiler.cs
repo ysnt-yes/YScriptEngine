@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
+using System.Reflection.PortableExecutable;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using Microsoft.CodeAnalysis;
@@ -14,10 +15,10 @@ namespace YScriptEngine.Roslyn;
 
 public sealed class RoslynScriptCompiler(IServiceProvider serviceProvider)
 {
-    private readonly ScriptOptions _globalOptions = 
+    private ScriptOptions GlobalOptions =>
         serviceProvider.GetService<ScriptOptions>() ?? ScriptOptions.Default;
 
-    private readonly ILogger<RoslynScriptCompiler> _logger = 
+    private readonly ILogger<RoslynScriptCompiler> _logger =
         serviceProvider.GetService<ILogger<RoslynScriptCompiler>>() ?? NullLogger<RoslynScriptCompiler>.Instance;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -28,6 +29,8 @@ public sealed class RoslynScriptCompiler(IServiceProvider serviceProvider)
 
         try
         {
+            var globalOptions = GlobalOptions;
+
             var types = new List<Type>();
             if (contextType.IsGenericType)
             {
@@ -44,7 +47,7 @@ public sealed class RoslynScriptCompiler(IServiceProvider serviceProvider)
                 .Where(n => !string.IsNullOrEmpty(n))
                 .Distinct();
 
-            var runtimeOptions = _globalOptions
+            var runtimeOptions = globalOptions
                 .AddReferences(contextAssemblies)
                 .AddImports(namespaces!);
 
@@ -65,12 +68,29 @@ public sealed class RoslynScriptCompiler(IServiceProvider serviceProvider)
 
             peStream.Seek(0, SeekOrigin.Begin);
 
-            var globalReferencePaths = _globalOptions.MetadataReferences
+            var peReferences = globalOptions.MetadataReferences
                 .OfType<PortableExecutableReference>()
+                .ToList();
+
+            var globalReferencePaths = peReferences
                 .Select(r => r.FilePath)
-                .Where(path => !string.IsNullOrEmpty(path))!;
+                .Where(path => !string.IsNullOrEmpty(path));
 
             var loadContext = new CollectibleScriptLoadContext(contextAssemblies, globalReferencePaths!);
+
+            foreach (var inMemoryRef in peReferences.Where(r => string.IsNullOrEmpty(r.FilePath)))
+            {
+                if (inMemoryRef.GetMetadata() is not AssemblyMetadata asmMetadata) continue;
+                foreach (var module in asmMetadata.GetModules())
+                {
+                    var peReaderProp = module.GetType().GetProperty("PEReader", BindingFlags.Instance | BindingFlags.NonPublic);
+                    if (peReaderProp?.GetValue(module) is not PEReader peReader) continue;
+                        
+                    using var libStream = new MemoryStream([.. peReader.GetEntireImage().GetContent()]);
+                    loadContext.LoadFromStream(libStream);
+                }
+            }
+
             var scriptAssembly = loadContext.LoadFromStream(peStream);
 
             return Task.FromResult<IScript>(new RoslynScript(scriptAssembly, loadContext));
@@ -152,7 +172,7 @@ public sealed class RoslynScriptCompiler(IServiceProvider serviceProvider)
             }
             catch
             {
-                // Not in Default ALC;
+                // Not in Default ALC.
             }
 
             if (assemblyName.Name is not null &&
