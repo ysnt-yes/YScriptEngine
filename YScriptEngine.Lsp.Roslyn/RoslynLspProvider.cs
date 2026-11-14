@@ -1,6 +1,5 @@
 ﻿using System.Collections.Concurrent;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.Classification;
 using Microsoft.CodeAnalysis.Completion;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Formatting;
@@ -13,6 +12,8 @@ using YScriptEngine.Lsp.Abstractions;
 
 namespace YScriptEngine.Lsp.Roslyn;
 
+public class UserLibraryMarker;
+
 public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynLspProvider> logger) : ILspProvider
 {
     private readonly ConcurrentDictionary<Type, (Solution Solution, ProjectId ProjectId)> _cache = new();
@@ -22,34 +23,41 @@ public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynL
     public void PreCacheBaseSolution(Type globalsType)
     {
         using var workspace = new AdhocWorkspace();
-        var typeName = globalsType.Name;
-        if (globalsType.IsGenericType)
-        {
-            typeName = globalsType.GetGenericArguments()[0].Name;
-        }
-        
+        var isLibrary = globalsType == typeof(UserLibraryMarker);
+
+        var typeName = isLibrary
+            ? "UserLibrary"
+            : globalsType.IsGenericType
+                ? globalsType.GetGenericArguments()[0].Name
+                : globalsType.Name;
+
         logger.LogDebug("Registering Type: {TypeName}", typeName);
-        
-        var compilationOptions = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, scriptClassName: "Submission#0", concurrentBuild: false, metadataImportOptions: MetadataImportOptions.Public)
+
+        var compilationOptions = new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                scriptClassName: isLibrary ? null : "Submission#0",
+                concurrentBuild: false,
+                metadataImportOptions: MetadataImportOptions.Public)
             .WithUsings(SharedScriptOptions.Imports);
-            
+
         var parseOptions = new CSharpParseOptions(
-            LanguageVersion.Latest, 
-            kind: SourceCodeKind.Script,
-            documentationMode: DocumentationMode.None );
+            LanguageVersion.Latest,
+            kind: isLibrary ? SourceCodeKind.Regular : SourceCodeKind.Script,
+            documentationMode: DocumentationMode.None);
+
         var projectId = ProjectId.CreateNewId();
 
         var projectInfo = ProjectInfo.Create(
-            id: projectId, 
-            version: VersionStamp.Create(), 
-            name: $"Project_{typeName}", 
+            id: projectId,
+            version: VersionStamp.Create(),
+            name: $"Project_{typeName}",
             assemblyName: $"Assembly_{typeName}",
-            language: LanguageNames.CSharp, 
-            compilationOptions: compilationOptions, 
+            language: LanguageNames.CSharp,
+            compilationOptions: compilationOptions,
             parseOptions: parseOptions,
-            metadataReferences: SharedScriptOptions.MetadataReferences, 
-            isSubmission: true, 
-            hostObjectType: globalsType
+            metadataReferences: SharedScriptOptions.MetadataReferences,
+            isSubmission: !isLibrary,
+            hostObjectType: isLibrary ? null : globalsType
         );
 
         _cache[globalsType] = (workspace.CurrentSolution.AddProject(projectInfo), projectId);
@@ -64,20 +72,24 @@ public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynL
             PreCacheBaseSolution(payloadType);
             return CreateTransientDocument(code, payloadType);
         }
-        
+
+        var fileName = payloadType == typeof(UserLibraryMarker) ? "UserLibrary.cs" : "script.csx";
         var docId = DocumentId.CreateNewId(template.ProjectId);
-        var ephemeralSolution = template.Solution.AddDocument(docId, "script.csx", SourceText.From(code));
-    
+        var ephemeralSolution = template.Solution.AddDocument(docId, fileName, SourceText.From(code));
+
         return ephemeralSolution.GetDocument(docId)!;
     }
 
-    public async Task<IEnumerable<LspCompletionItem>> GetCompletionsAsync(string code, int cursorPosition, Type payloadType, CancellationToken token)
+
+    public async Task<IEnumerable<LspCompletionItem>> GetCompletionsAsync(string code, int cursorPosition,
+        Type payloadType, CancellationToken token)
     {
         var document = CreateTransientDocument(code, payloadType);
         var completionService = CompletionService.GetService(document);
         if (completionService == null) return [];
 
-        var completions = await completionService.GetCompletionsAsync(document, cursorPosition, cancellationToken: token);
+        var completions =
+            await completionService.GetCompletionsAsync(document, cursorPosition, cancellationToken: token);
         if (completions.ItemsList.Count == 0) return [];
 
         return completions.ItemsList.Select(item => new LspCompletionItem(
@@ -87,10 +99,11 @@ public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynL
         ));
     }
 
-    public async Task<IEnumerable<LspDiagnostic>> GetDiagnosticsAsync(string code, Type payloadType, CancellationToken token)
+    public async Task<IEnumerable<LspDiagnostic>> GetDiagnosticsAsync(string code, Type payloadType,
+        CancellationToken token)
     {
         var document = CreateTransientDocument(code, payloadType);
-        
+
         var compilation = await document.Project.GetCompilationAsync(token);
         if (compilation == null) return [];
 
@@ -106,7 +119,7 @@ public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynL
                 Code: d.Id
             ));
     }
-    
+
     public async Task<string> FormatCodeAsync(string code, Type payloadType, CancellationToken token)
     {
         var document = CreateTransientDocument(code, payloadType);
@@ -114,8 +127,9 @@ public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynL
         var formattedText = await formattedDocument.GetTextAsync(token);
         return formattedText.ToString();
     }
-    
-    public async Task<string?> GetHoverInfoAsync(string code, int cursorPosition, Type payloadType, CancellationToken token)
+
+    public async Task<string?> GetHoverInfoAsync(string code, int cursorPosition, Type payloadType,
+        CancellationToken token)
     {
         var document = CreateTransientDocument(code, payloadType);
         var quickInfoService = QuickInfoService.GetService(document);
@@ -123,11 +137,11 @@ public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynL
 
         var quickInfo = await quickInfoService.GetQuickInfoAsync(document, cursorPosition, token);
         if (quickInfo == null) return null;
-        
+
         var sectionsText = quickInfo.Sections.Select(s => s.Text);
         return string.Join("\n\n", sectionsText);
     }
-    
+
     public async Task<IEnumerable<LspQuickAction>> GetQuickActionsAsync(
         string code,
         int startOffset,
@@ -161,9 +175,9 @@ public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynL
             {
                 if (textChange.Span.Start >= startOffset ||
                     textChange.NewText?.Contains("using ") != true) continue;
-                
+
                 var lineSpan = text.Lines.GetLinePositionSpan(textChange.Span);
-                
+
                 actions.Add(new LspQuickAction(
                     Title: textChange.NewText.Trim(),
                     StartLine: lineSpan.Start.Line + 1,
@@ -176,6 +190,4 @@ public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynL
 
         return actions.DistinctBy(a => a.Title);
     }
-
-    
 }
