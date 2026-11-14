@@ -11,4 +11,9 @@ public class JintScript(Engine engine, Prepared<Script> preparedProgram) : IScri
         engine.SetValue("context", context);
         await engine.EvaluateAsync(preparedProgram);
     }
+
+    public void Dispose()
+    {
+        engine.Dispose();
+    }
 }
