@@ -166,13 +166,20 @@ public sealed class RoslynScriptCompiler(IServiceProvider serviceProvider)
                 return assembly;
             }
 
+            var loadedAssembly = AppDomain.CurrentDomain.GetAssemblies()
+                .FirstOrDefault(a => string.Equals(a.GetName().Name, assemblyName.Name, StringComparison.OrdinalIgnoreCase));
+            if (loadedAssembly is not null)
+            {
+                return loadedAssembly;
+            }
+
             try
             {
                 return Default.LoadFromAssemblyName(assemblyName);
             }
             catch
             {
-                // Not in Default ALC.
+                // Not in Default ALC;
             }
 
             if (assemblyName.Name is not null &&
@@ -183,5 +190,6 @@ public sealed class RoslynScriptCompiler(IServiceProvider serviceProvider)
 
             return null;
         }
+
     }
 }
