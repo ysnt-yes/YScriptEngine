@@ -47,6 +47,18 @@ public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynL
 
         var projectId = ProjectId.CreateNewId();
 
+        var documents = new List<DocumentInfo>();
+        if (isLibrary)
+        {
+            var globalUsingsCode = string.Join("\n",
+                SharedScriptOptions.Imports.Distinct().Select(ns => $"global using {ns};"));
+            documents.Add(DocumentInfo.Create(
+                id: DocumentId.CreateNewId(projectId),
+                name: "GlobalUsings.g.cs",
+                loader: TextLoader.From(TextAndVersion.Create(SourceText.From(globalUsingsCode), VersionStamp.Create()))
+            ));
+        }
+
         var projectInfo = ProjectInfo.Create(
             id: projectId,
             version: VersionStamp.Create(),
@@ -55,6 +67,7 @@ public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynL
             language: LanguageNames.CSharp,
             compilationOptions: compilationOptions,
             parseOptions: parseOptions,
+            documents: documents,
             metadataReferences: SharedScriptOptions.MetadataReferences,
             isSubmission: !isLibrary,
             hostObjectType: isLibrary ? null : globalsType
@@ -104,10 +117,10 @@ public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynL
     {
         var document = CreateTransientDocument(code, payloadType);
 
-        var compilation = await document.Project.GetCompilationAsync(token);
-        if (compilation == null) return [];
+        var semanticModel = await document.GetSemanticModelAsync(token);
+        if (semanticModel == null) return [];
 
-        var allDiagnostics = compilation.GetDiagnostics(token);
+        var allDiagnostics = semanticModel.GetDiagnostics(cancellationToken: token);
 
         return allDiagnostics
             .Where(d => d.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning)

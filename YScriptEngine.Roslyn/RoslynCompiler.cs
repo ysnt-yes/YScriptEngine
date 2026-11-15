@@ -31,27 +31,7 @@ public sealed class RoslynScriptCompiler(IServiceProvider serviceProvider)
         {
             var globalOptions = GlobalOptions;
 
-            var types = new List<Type>();
-            if (contextType.IsGenericType)
-            {
-                types.AddRange(contextType.GetGenericArguments());
-            }
-
-            var contextAssemblies = types.Select(t => t.Assembly)
-                .Append(contextType.Assembly)
-                .Distinct()
-                .ToList();
-
-            var namespaces = types.Select(t => t.Namespace)
-                .Append(contextType.Namespace)
-                .Where(n => !string.IsNullOrEmpty(n))
-                .Distinct();
-
-            var runtimeOptions = globalOptions
-                .AddReferences(contextAssemblies)
-                .AddImports(namespaces!);
-
-            var script = CSharpScript.Create<object>(scriptCode, runtimeOptions, globalsType: contextType);
+            var script = CSharpScript.Create<object>(scriptCode, globalOptions, globalsType: contextType);
             var compilation = script.GetCompilation();
 
             using var peStream = new MemoryStream();
@@ -68,29 +48,12 @@ public sealed class RoslynScriptCompiler(IServiceProvider serviceProvider)
 
             peStream.Seek(0, SeekOrigin.Begin);
 
-            var peReferences = globalOptions.MetadataReferences
+            var globalReferencePaths = globalOptions.MetadataReferences
                 .OfType<PortableExecutableReference>()
-                .ToList();
-
-            var globalReferencePaths = peReferences
                 .Select(r => r.FilePath)
-                .Where(path => !string.IsNullOrEmpty(path));
+                .Where(path => !string.IsNullOrEmpty(path))!;
 
-            var loadContext = new CollectibleScriptLoadContext(contextAssemblies, globalReferencePaths!);
-
-            foreach (var inMemoryRef in peReferences.Where(r => string.IsNullOrEmpty(r.FilePath)))
-            {
-                if (inMemoryRef.GetMetadata() is not AssemblyMetadata asmMetadata) continue;
-                foreach (var module in asmMetadata.GetModules())
-                {
-                    var peReaderProp = module.GetType().GetProperty("PEReader", BindingFlags.Instance | BindingFlags.NonPublic);
-                    if (peReaderProp?.GetValue(module) is not PEReader peReader) continue;
-                        
-                    using var libStream = new MemoryStream([.. peReader.GetEntireImage().GetContent()]);
-                    loadContext.LoadFromStream(libStream);
-                }
-            }
-
+            var loadContext = new CollectibleScriptLoadContext(globalReferencePaths!);
             var scriptAssembly = loadContext.LoadFromStream(peStream);
 
             return Task.FromResult<IScript>(new RoslynScript(scriptAssembly, loadContext));
@@ -100,6 +63,7 @@ public sealed class RoslynScriptCompiler(IServiceProvider serviceProvider)
             return Task.FromException<IScript>(exception);
         }
     }
+
 
     private void LogCompilationDiagnostics(ImmutableArray<Diagnostic> diagnostics)
     {
@@ -138,34 +102,16 @@ public sealed class RoslynScriptCompiler(IServiceProvider serviceProvider)
         }
     }
 
-    private sealed class CollectibleScriptLoadContext : AssemblyLoadContext
+    private sealed class CollectibleScriptLoadContext(IEnumerable<string> referenceFilePaths)
+        : AssemblyLoadContext(isCollectible: true)
     {
-        private readonly Dictionary<string, Assembly> _knownAssemblies;
-        private readonly Dictionary<string, string> _knownPathsBySimpleName;
-
-        public CollectibleScriptLoadContext(
-            IEnumerable<Assembly> knownAssemblies,
-            IEnumerable<string> referenceFilePaths)
-            : base(isCollectible: true)
-        {
-            _knownAssemblies = knownAssemblies
-                .Where(a => a.FullName is not null)
-                .GroupBy(a => a.FullName!)
-                .ToDictionary(g => g.Key, g => g.First());
-
-            _knownPathsBySimpleName = referenceFilePaths
-                .Where(File.Exists)
-                .GroupBy(p => Path.GetFileNameWithoutExtension(p), StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-        }
+        private readonly Dictionary<string, string> _knownPathsBySimpleName = referenceFilePaths
+            .Where(File.Exists)
+            .GroupBy(p => Path.GetFileNameWithoutExtension(p), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
         protected override Assembly? Load(AssemblyName assemblyName)
         {
-            if (_knownAssemblies.TryGetValue(assemblyName.FullName, out var assembly))
-            {
-                return assembly;
-            }
-
             var loadedAssembly = AppDomain.CurrentDomain.GetAssemblies()
                 .FirstOrDefault(a => string.Equals(a.GetName().Name, assemblyName.Name, StringComparison.OrdinalIgnoreCase));
             if (loadedAssembly is not null)
@@ -179,17 +125,15 @@ public sealed class RoslynScriptCompiler(IServiceProvider serviceProvider)
             }
             catch
             {
-                // Not in Default ALC;
+                // Not in Default ALC
             }
 
             if (assemblyName.Name is not null &&
                 _knownPathsBySimpleName.TryGetValue(assemblyName.Name, out var dllPath))
             {
-                return Default.LoadFromAssemblyPath(dllPath);
+                return LoadFromAssemblyPath(dllPath);
             }
 
             return null;
         }
-
-    }
-}
+    }}
