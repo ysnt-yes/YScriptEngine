@@ -21,6 +21,26 @@ public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynL
     private ScriptOptions SharedScriptOptions => serviceProvider.GetRequiredService<ScriptOptions>();
     public void InvalidateCache() => _cache.Clear();
 
+    private static readonly List<string> RecognizedSemanticTokenTypes =
+    [
+        ClassificationTypeNames.ClassName,
+        ClassificationTypeNames.RecordClassName,
+        ClassificationTypeNames.StructName,
+        ClassificationTypeNames.RecordStructName,
+        ClassificationTypeNames.InterfaceName,
+        ClassificationTypeNames.EnumName,
+        ClassificationTypeNames.DelegateName,
+        ClassificationTypeNames.TypeParameterName,
+        ClassificationTypeNames.MethodName,
+        ClassificationTypeNames.ExtensionMethodName,
+        ClassificationTypeNames.LocalName,
+        ClassificationTypeNames.ParameterName,
+        ClassificationTypeNames.FieldName,
+        ClassificationTypeNames.PropertyName,
+        ClassificationTypeNames.ConstantName,
+        ClassificationTypeNames.EnumMemberName
+    ];
+
     public void PreCacheBaseSolution(Type globalsType)
     {
         using var workspace = new AdhocWorkspace();
@@ -217,23 +237,7 @@ public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynL
             token);
 
         return classifiedSpans
-            .Where(s => s.ClassificationType is
-                ClassificationTypeNames.ClassName or
-                ClassificationTypeNames.RecordClassName or
-                ClassificationTypeNames.StructName or
-                ClassificationTypeNames.RecordStructName or
-                ClassificationTypeNames.InterfaceName or
-                ClassificationTypeNames.EnumName or
-                ClassificationTypeNames.DelegateName or
-                ClassificationTypeNames.TypeParameterName or
-                ClassificationTypeNames.MethodName or
-                ClassificationTypeNames.ExtensionMethodName or
-                ClassificationTypeNames.LocalName or
-                ClassificationTypeNames.ParameterName or
-                ClassificationTypeNames.FieldName or
-                ClassificationTypeNames.PropertyName or
-                ClassificationTypeNames.ConstantName or
-                ClassificationTypeNames.EnumMemberName)
+            .Where(s => RecognizedSemanticTokenTypes.Contains(s.ClassificationType))
             .Select(s => new LspSemanticToken(
                 Start: s.TextSpan.Start,
                 End: s.TextSpan.End,
