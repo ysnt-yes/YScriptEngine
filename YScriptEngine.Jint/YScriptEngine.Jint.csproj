@@ -1,14 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-
-    <PropertyGroup>
-        <TargetFramework>net10.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
-    </PropertyGroup>
     
     <!-- Release Settings -->
     <PropertyGroup>
-        <Version>1.0.6-alpha</Version>
+        <Version>1.0.7-alpha</Version>
         <Description>The Jint Engine for the YScriptEngine project.</Description>
         <PackageTags>YScriptEngine;Scripting;Jint</PackageTags>
     </PropertyGroup>
@@ -18,7 +12,7 @@
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="Jint" Version="4.16.4" />
+      <PackageReference Include="Jint" Version="4.18.1" />
     </ItemGroup>
 
 </Project>
