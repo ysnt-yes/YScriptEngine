@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Classification;
 using Microsoft.CodeAnalysis.Completion;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Formatting;
@@ -203,4 +204,40 @@ public class RoslynLspProvider(IServiceProvider serviceProvider, ILogger<RoslynL
 
         return actions.DistinctBy(a => a.Title);
     }
+
+    public async Task<IEnumerable<LspSemanticToken>> GetSemanticTokensAsync(
+        string code,
+        Type payloadType,
+        CancellationToken token)
+    {
+        var document = CreateTransientDocument(code, payloadType);
+        var classifiedSpans = await Classifier.GetClassifiedSpansAsync(
+            document,
+            new TextSpan(0, code.Length),
+            token);
+
+        return classifiedSpans
+            .Where(s => s.ClassificationType is
+                ClassificationTypeNames.ClassName or
+                ClassificationTypeNames.RecordClassName or
+                ClassificationTypeNames.StructName or
+                ClassificationTypeNames.RecordStructName or
+                ClassificationTypeNames.InterfaceName or
+                ClassificationTypeNames.EnumName or
+                ClassificationTypeNames.DelegateName or
+                ClassificationTypeNames.TypeParameterName or
+                ClassificationTypeNames.MethodName or
+                ClassificationTypeNames.ExtensionMethodName or
+                ClassificationTypeNames.LocalName or
+                ClassificationTypeNames.ParameterName or
+                ClassificationTypeNames.FieldName or
+                ClassificationTypeNames.PropertyName or
+                ClassificationTypeNames.ConstantName or
+                ClassificationTypeNames.EnumMemberName)
+            .Select(s => new LspSemanticToken(
+                Start: s.TextSpan.Start,
+                End: s.TextSpan.End,
+                Kind: s.ClassificationType));
+    }
+
 }
